@@ -6,6 +6,104 @@ import '../providers/favorites_provider.dart';
 import '../providers/language_provider.dart';
 import '../theme/app_theme.dart';
 
+/// Look-up map of common English ingredient words/phrases → Bangla.
+/// Keyed on lowercase ASCII so callers can do `dictionary[token.toLowerCase()]`.
+/// Used as a safety net in the recipe-detail screen so that any stray
+/// English wording (e.g. for a recipe whose data only has an English name)
+/// still reads as Bangla when the UI language is Bangla.
+const Map<String, String> _kIngredientEnToBn = {
+  // Vegetables & aromatics
+  'potato': 'আলু',
+  'potatoes': 'আলু',
+  'aloo': 'আলু',
+  'onion': 'পেঁয়াজ',
+  'onions': 'পেঁয়াজ',
+  'peyaj': 'পেঁয়াজ',
+  'tomato': 'টমেটো',
+  'tomatoes': 'টমেটো',
+  'chili': 'কাঁচামরিচ',
+  'chilies': 'কাঁচামরিচ',
+  'green chili': 'কাঁচামরিচ',
+  'green chilies': 'কাঁচামরিচ',
+  'red chili': 'শুকনো মরিচ',
+  'garlic': 'রসুন',
+  'ginger': 'আদা',
+  'turmeric': 'হলুদ',
+  'coriander': 'ধনেপাতা',
+  'cumin': 'জিরা',
+  'mustard': 'সরিষা',
+  'capsicum': 'ক্যাপসিকাম',
+  'cauliflower': 'ফুলকপি',
+  'carrot': 'গাজর',
+  'peas': 'মটর',
+  'cucumber': 'শসা',
+  'eggplant': 'বেগুন',
+  'brinjal': 'বেগুন',
+  'spinach': 'পালংশাক',
+  // Proteins
+  'egg': 'ডিম',
+  'eggs': 'ডিম',
+  'chicken': 'মুরগির মাংস',
+  'mutton': 'খাসির মাংস',
+  'beef': 'গরুর মাংস',
+  'fish': 'মাছ',
+  'prawn': 'চিংড়ি',
+  'shrimp': 'চিংড়ি',
+  'lentil': 'ডাল',
+  'lentils': 'ডাল',
+  'dal': 'ডাল',
+  'chickpea': 'ছোলা',
+  'chickpeas': 'ছোলা',
+  'besan': 'বেসন',
+  // Grains & staples
+  'rice': 'ভাত',
+  'flour': 'ময়দা',
+  'wheat': 'গম',
+  'bread': 'পাউরুটি',
+  'roti': 'রুটি',
+  'ruti': 'রুটি',
+  // Dairy
+  'milk': 'দুধ',
+  'yogurt': 'দই',
+  'curd': 'দই',
+  'butter': 'মাখন',
+  'ghee': 'ঘি',
+  // Oils & liquids
+  'oil': 'তেল',
+  'mustard oil': 'সরিষার তেল',
+  'water': 'পানি',
+  // Seasonings
+  'salt': 'লবণ',
+  'sugar': 'চিনি',
+  'pepper': 'গোলমরিচ',
+  'bay leaf': 'তেজপাতা',
+  'cardamom': 'এলাচ',
+  'cinnamon': 'দারুচিনি',
+  'cloves': 'লবঙ্গ',
+  // Misc
+  'tea': 'চা',
+};
+
+/// Translates a single ingredient name string to Bangla if it (or any of
+/// its whitespace-separated tokens) is present in [_kIngredientEnToBn].
+/// Returns the input unchanged when no mapping exists, so callers can
+/// safely use it as a drop-in for any name.
+String bnIngredientName(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return trimmed;
+  // Whole-phrase lookup first.
+  final whole = _kIngredientEnToBn[trimmed.toLowerCase()];
+  if (whole != null) return whole;
+  // Token-level lookup (longest tokens first so "green chili" beats "chili").
+  final tokens = trimmed.toLowerCase().split(RegExp(r'[\s,]+'));
+  final reordered = [...tokens]..sort((a, b) => b.length.compareTo(a.length));
+  for (final t in reordered) {
+    final mapped = _kIngredientEnToBn[t];
+    if (mapped != null) return mapped;
+  }
+  return trimmed;
+}
+
 class RecipeDetailScreen extends StatefulWidget {
   final Recipe recipe;
   const RecipeDetailScreen({super.key, required this.recipe});
@@ -146,7 +244,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      t.isBn ? i.nameBn : i.nameEn,
+                      t.isBn ? bnIngredientName(i.nameBn) : i.nameEn,
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),

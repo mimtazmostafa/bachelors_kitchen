@@ -1,23 +1,63 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import '../config/bd_apps_config.dart';
 import '../providers/language_provider.dart';
 import '../providers/subscription_provider.dart';
+import '../services/bd_api_client.dart';
 import '../theme/app_theme.dart';
+import 'login_screen.dart';
 import 'subscribe_screen.dart';
 
 /// Settings page — reachable from the home AppBar gear icon.
 ///
-/// Shows the subscriber's phone + bdapps subscriber id, a test-mode badge,
-/// the app version, and the Log out button. Logging out clears all
-/// persisted subscription state and navigates to [SubscribeScreen] with the
-/// entire back stack removed so the back button cannot return here.
-class SettingsScreen extends StatelessWidget {
+/// Shows the subscriber's phone + bdapps subscriber id, the app version,
+/// and two distinct actions:
+///   - Log out     — clears isSubscribed only; routes to LoginScreen
+///   - Unsubscribe — confirms, calls the unsubscribe API, clears both
+///                   isSubscribed and the saved phone, routes to SubscribeScreen
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
-  Future<void> _confirmAndLogout(BuildContext context) async {
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  final _api = BdApiClient();
+  bool _unsubscribing = false;
+  String _savedPhone = '—';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedPhone();
+  }
+
+  Future<void> _loadSavedPhone() async {
+    final prefs = await SharedPreferences.getInstance();
+    // Use the same key SubscriptionProvider writes to. Value is in
+    // 8801XXXXXXXXX form — strip the country prefix for display.
+    final raw = prefs.getString('subscriber_phone') ?? '';
+    String display = '—';
+    if (raw.isNotEmpty) {
+      if (raw.startsWith('880') && raw.length >= 13) {
+        display = '0${raw.substring(3)}';
+      } else {
+        display = raw;
+      }
+    }
+    if (!mounted) return;
+    setState(() => _savedPhone = display);
+  }
+
+  @override
+  void dispose() {
+    _api.close();
+    super.dispose();
+  }
+
+  Future<void> _confirmAndLogout() async {
     final t = context.read<LanguageProvider>().t;
     final ok = await showDialog<bool>(
       context: context,
@@ -40,10 +80,61 @@ class SettingsScreen extends StatelessWidget {
         ],
       ),
     );
-    if (ok != true) return;
-    if (!context.mounted) return;
+    if (ok != true || !mounted) return;
     await context.read<SubscriptionProvider>().logout();
-    if (!context.mounted) return;
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
+  }
+
+  Future<void> _confirmAndUnsubscribe() async {
+    final t = context.read<LanguageProvider>().t;
+    final sub = context.read<SubscriptionProvider>();
+    final phone = sub.subscriberPhone;
+    if (phone == null || phone.isEmpty) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(t.unsubscribeConfirmTitle),
+        content: Text(t.unsubscribeConfirmBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(t.cancel),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFC62828),
+            ),
+            child: Text(t.unsubscribeConfirm),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _unsubscribing = true);
+    final res = await _api.unsubscribe(phone);
+    if (!mounted) return;
+    setState(() => _unsubscribing = false);
+
+    // Always clear local state, even if the server call failed, so the
+    // user is no longer treated as subscribed in this app.
+    await context.read<SubscriptionProvider>().unsubscribe();
+    if (!mounted) return;
+
+    if (!res.ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(res.error ?? 'Unsubscription failed.')),
+      );
+    }
+
+    if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const SubscribeScreen()),
       (route) => false,
@@ -55,9 +146,8 @@ class SettingsScreen extends StatelessWidget {
     final t = context.watch<LanguageProvider>().t;
     final sub = context.watch<SubscriptionProvider>();
     final phone = sub.subscriberPhoneDisplay.isEmpty
-        ? '—'
+        ? _savedPhone
         : sub.subscriberPhoneDisplay;
-    final subId = sub.subscriberId ?? '—';
 
     return Scaffold(
       appBar: AppBar(title: Text(t.settings)),
@@ -72,21 +162,6 @@ class SettingsScreen extends StatelessWidget {
                 icon: Icons.phone_android_rounded,
                 label: t.subscribedWith,
                 value: phone,
-              ),
-              const Divider(height: 24),
-              _InfoRow(
-                icon: Icons.tag_rounded,
-                label: t.subscriberId,
-                value: subId,
-                mono: true,
-              ),
-              const Divider(height: 24),
-              const _InfoRow(
-                icon: Icons.science_outlined,
-                label: BdAppsConfig.testMode ? 'Test mode' : 'Live mode',
-                value: BdAppsConfig.testMode ? 'ON' : 'OFF',
-                valueColor:
-                    BdAppsConfig.testMode ? Color(0xFFF9A825) : AppTheme.secondary,
               ),
             ],
           ),
@@ -109,41 +184,79 @@ class SettingsScreen extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 32),
-          SizedBox(
-            height: 52,
-            child: ElevatedButton.icon(
-              onPressed: () => _confirmAndLogout(context),
-              icon: const Icon(Icons.logout_rounded),
-              label: Text(t.logout),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFC62828),
-                foregroundColor: Colors.white,
-                minimumSize: const Size.fromHeight(52),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                textStyle: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
+          _ActionButton(
+            label: t.logout,
+            icon: Icons.logout_rounded,
+            backgroundColor: const Color(0xFFC62828),
+            foregroundColor: Colors.white,
+            onPressed: _confirmAndLogout,
           ),
-          if (kDebugMode) ...[
-            const SizedBox(height: 24),
-            Center(
-              child: Text(
-                'DEBUG BUILD',
-                style: TextStyle(
-                  color: Colors.grey.shade500,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 1.2,
-                ),
-              ),
-            ),
-          ],
+          const SizedBox(height: 12),
+          _ActionButton(
+            label: t.unsubscribe,
+            icon: Icons.cancel_outlined,
+            backgroundColor: Colors.white,
+            foregroundColor: const Color(0xFFC62828),
+            borderColor: const Color(0xFFC62828),
+            onPressed: _unsubscribing ? null : _confirmAndUnsubscribe,
+            trailing: _unsubscribing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFFC62828),
+                    ),
+                  )
+                : null,
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color backgroundColor;
+  final Color foregroundColor;
+  final Color? borderColor;
+  final VoidCallback? onPressed;
+  final Widget? trailing;
+  const _ActionButton({
+    required this.label,
+    required this.icon,
+    required this.backgroundColor,
+    required this.foregroundColor,
+    this.borderColor,
+    this.onPressed,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 52,
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon),
+        label: Text(label),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: backgroundColor,
+          foregroundColor: foregroundColor,
+          minimumSize: const Size.fromHeight(52),
+          side: borderColor == null
+              ? null
+              : BorderSide(color: borderColor!, width: 1.4),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          textStyle: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
     );
   }
@@ -196,14 +309,10 @@ class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
-  final bool mono;
-  final Color? valueColor;
   const _InfoRow({
     required this.icon,
     required this.label,
     required this.value,
-    this.mono = false,
-    this.valueColor,
   });
 
   @override
@@ -215,6 +324,7 @@ class _InfoRow extends StatelessWidget {
         Expanded(
           child: Text(
             label,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
@@ -222,13 +332,18 @@ class _InfoRow extends StatelessWidget {
             ),
           ),
         ),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 14,
-            fontFamily: mono ? 'monospace' : null,
-            fontWeight: FontWeight.w700,
-            color: valueColor ?? const Color(0xFF1B1B1B),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1B1B1B),
+            ),
           ),
         ),
       ],

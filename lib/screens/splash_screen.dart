@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/language_provider.dart';
 import '../providers/subscription_provider.dart';
 import '../theme/app_theme.dart';
+import 'login_screen.dart';
 import 'root_shell.dart';
 import 'subscribe_screen.dart';
 
@@ -51,12 +52,31 @@ class _SplashScreenState extends State<SplashScreen>
       await sub.load();
     }
     if (!mounted) return;
+
+    // 3-way routing:
+    //   subscribed + saved phone → home
+    //   not subscribed + saved phone (logged out or expired) → login
+    //   no saved phone at all → subscribe (fresh install / unsubscribed)
+    final hasPhone =
+        sub.subscriberPhone != null && sub.subscriberPhone!.isNotEmpty;
+    Widget destination;
+    if (sub.isSubscribed && hasPhone) {
+      destination = const RootShell();
+    } else if (!sub.isSubscribed && hasPhone) {
+      // Logged-out / expired user — keep the phone so they can re-verify.
+      destination = const LoginScreen();
+    } else if (sub.isSubscribed && !hasPhone) {
+      // Inconsistent state: flag is set but phone is gone. Clear and
+      // route to subscribe so the user can start fresh.
+      await sub.clear();
+      if (!mounted) return;
+      destination = const SubscribeScreen();
+    } else {
+      destination = const SubscribeScreen();
+    }
+
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => sub.isSubscribed
-            ? const RootShell()
-            : const SubscribeScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => destination),
     );
   }
 

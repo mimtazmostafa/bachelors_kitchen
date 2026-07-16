@@ -14,13 +14,15 @@ Widget _cardTarget(BuildContext context, Recipe r) =>
 
 class RecipeCard extends StatelessWidget {
   final Recipe recipe;
-  final double? matchPercent; // 0..1, optional AI badge
+  /// Optional short badge text shown as an info chip (e.g. "ভালো মিল",
+  /// "Chef's pick"). Replaces the old "100% match" percentage display.
+  final String? matchLabel;
   final VoidCallback? onTap;
 
   const RecipeCard({
     super.key,
     required this.recipe,
-    this.matchPercent,
+    this.matchLabel,
     this.onTap,
   });
 
@@ -116,10 +118,10 @@ class RecipeCard extends StatelessWidget {
                       t.difficultyLabel(recipe.difficulty),
                       t.difficultyColor(recipe.difficulty),
                     ),
-                    if (matchPercent != null)
+                    if (matchLabel != null)
                       _infoChip(
                         Icons.psychology_alt,
-                        '${t.match} ${(matchPercent! * 100).round()}%',
+                        matchLabel!,
                         AppTheme.primary,
                       ),
                   ],

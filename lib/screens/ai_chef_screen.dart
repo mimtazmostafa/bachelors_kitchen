@@ -240,15 +240,11 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
       }
 
-    } catch (e, st) {
+    } catch (e) {
 
       // Final safety net: if anything in the offline path throws (e.g. a
-
       // bad RecipeMatch from a future change), we still need to clear the
-
       // loading spinner so the user isn't stuck.
-
-      debugPrint('AI Chef _run error: $e\n$st');
 
       if (!mounted) return;
 
@@ -772,7 +768,7 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
                         recipe: _results[i].recipe,
 
-                        matchPercent: _results[i].score,
+                        matchLabel: t.matchLabel(_results[i].score),
 
                       ),
 
@@ -844,7 +840,7 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
           Text(
 
-            isBn ? 'AI রেসিপি' : 'AI recipe draft',
+            isBn ? 'দেখো মিলবে' : 'This works with what you have',
             style: const TextStyle(
 
               fontWeight: FontWeight.w800,
@@ -975,9 +971,9 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
                     _chip(Icons.timer, '${r.cookingMinutes} min'),
 
-                    _chip(Icons.payments, '?${r.costTaka}'),
+                    _chip(Icons.payments, '\u09F3${r.costTaka}'),
 
-                    _chip(Icons.bar_chart, isBn ? '???' : 'Easy'),
+                    _chip(Icons.bar_chart, isBn ? '\u09B8\u09B9\u099C' : 'Easy'),
 
                   ],
 
@@ -1104,7 +1100,7 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
     final label = m.synthesized
 
-        ? (isBn ? 'AI-এর পছন্দ' : "Chef\u2019s pick")
+        ? (isBn ? 'শেফের পছন্দ' : "Chef\u2019s pick")
 
         : '${t.matchLabel(score)} \u2014 ${m.matchedCount}/${m.totalRequired}';
 
@@ -1346,6 +1342,17 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
       }) {
 
+    // FIX 4 Bangla-first AI Chef card. Shows:
+    //   - Intro line "এই উপকরণ দিয়ে আপনি বানাতে পারবেন —"
+    //   - Bangla recipe name (falls back to English if blank)
+    //   - Bangla ingredient lines with Bn names + quantity
+    //   - 5 numbered Bangla steps
+    //   - Chips row: ৳cost  +  "X মিনিট"  +  সহজ/মাঝারি/কঠিন
+    //   - Green "Bachelor Tip" card with bachelor_tip text
+    final name = isBn ? d.recipeNameBn : d.recipeNameEn;
+    final steps = d.steps;
+    const introBn = 'এই উপকরণ দিয়ে আপনি বানাতে পারবেন —';
+
     return Container(
 
       decoration: BoxDecoration(
@@ -1372,7 +1379,7 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
       child: Padding(
 
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
 
         child: Column(
 
@@ -1380,35 +1387,32 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
           children: [
 
-            Row(
+            // Intro line — Bangla-first.
+            const Row(
 
               children: [
 
-                Container(
+                Icon(Icons.auto_awesome,
 
-                  padding:
+                    size: 16, color: AppTheme.primary),
 
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                SizedBox(width: 6),
 
-                  decoration: BoxDecoration(
-
-                    color: const Color(0xFFFFF1CC),
-
-                    borderRadius: BorderRadius.circular(8),
-
-                  ),
+                Expanded(
 
                   child: Text(
 
-                    t.aiRecipeTitle,
+                    introBn,
 
-                    style: const TextStyle(
+                    style: TextStyle(
 
-                      fontSize: 10,
+                      fontSize: 12,
 
-                      fontWeight: FontWeight.w800,
+                      fontWeight: FontWeight.w700,
 
-                      color: Color(0xFF8C6A1A),
+                      color: AppTheme.primary,
+
+                      fontStyle: FontStyle.italic,
 
                     ),
 
@@ -1416,53 +1420,20 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
                 ),
 
-                const SizedBox(width: 8),
-
-                if (d.prepMinutes > 0)
-
-                  Row(
-
-                    children: [
-
-                      const Icon(Icons.timer_outlined,
-
-                          size: 14, color: Color(0xFF6B4900)),
-
-                      const SizedBox(width: 3),
-
-                      Text(
-
-                        '${t.aiPrepTime}: ${d.prepMinutes} min',
-
-                        style: const TextStyle(
-
-                          fontSize: 12,
-
-                          fontWeight: FontWeight.w600,
-
-                          color: Color(0xFF6B4900),
-
-                        ),
-
-                      ),
-
-                    ],
-
-                  ),
-
               ],
 
             ),
 
             const SizedBox(height: 8),
 
+            // Recipe name.
             Text(
 
-              d.title,
+              name,
 
               style: const TextStyle(
 
-                fontSize: 17,
+                fontSize: 20,
 
                 fontWeight: FontWeight.w800,
 
@@ -1474,8 +1445,46 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
             ),
 
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
 
+            // Chips: cost (৳)  +  time (min)  +  difficulty_bn.
+            Wrap(
+
+              spacing: 8,
+
+              runSpacing: 6,
+
+              children: [
+
+                if (d.costTaka > 0)
+
+                  _chip(Icons.payments, '\u09F3${d.costTaka}'),
+
+                if (d.timeMinutes > 0)
+
+                  _chip(
+
+                    Icons.timer,
+
+                    isBn
+
+                        ? '${d.timeMinutes} ${'\u09AE\u09BF\u09A8\u09BF\u099F'}'
+
+                        : '${d.timeMinutes} min',
+
+                  ),
+
+                if (d.difficultyBn.isNotEmpty)
+
+                  _chip(Icons.bar_chart, d.difficultyBn),
+
+              ],
+
+            ),
+
+            const SizedBox(height: 16),
+
+            // Ingredients — Bangla names + quantity.
             Text(
 
               t.aiIngredients,
@@ -1492,13 +1501,13 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
             ),
 
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
 
             ...d.ingredients.map(
 
               (ing) => Padding(
 
-                padding: const EdgeInsets.symmetric(vertical: 2),
+                padding: const EdgeInsets.symmetric(vertical: 3),
 
                 child: Row(
 
@@ -1506,27 +1515,65 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
                   children: [
 
-                    const Text('•  ',
+                    const Text(
 
-                        style: TextStyle(
+                      '•  ',
 
-                            color: Color(0xFFB57A00),
+                      style: TextStyle(
 
-                            fontWeight: FontWeight.w800)),
+                        color: Color(0xFFB57A00),
+
+                        fontWeight: FontWeight.w800,
+
+                      ),
+
+                    ),
 
                     Expanded(
 
-                      child: Text(
+                      child: Text.rich(
 
-                        ing,
+                        TextSpan(
 
-                        style: const TextStyle(
+                          children: [
 
-                          fontSize: 13,
+                            TextSpan(
 
-                          color: Color(0xFF333333),
+                              text: isBn ? ing.nameBn : ing.nameEn,
 
-                          height: 1.35,
+                              style: const TextStyle(
+
+                                fontSize: 14,
+
+                                fontWeight: FontWeight.w700,
+
+                                color: Color(0xFF1F1F1F),
+
+                              ),
+
+                            ),
+
+                            if (ing.quantity.isNotEmpty) ...[
+
+                              const TextSpan(text: '  '),
+
+                              TextSpan(
+
+                                text: '— ${ing.quantity}',
+
+                                style: const TextStyle(
+
+                                  fontSize: 13,
+
+                                  color: Color(0xFF555555),
+
+                                ),
+
+                              ),
+
+                            ],
+
+                          ],
 
                         ),
 
@@ -1542,8 +1589,9 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
             ),
 
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
 
+            // 5 Bangla cooking steps (numbered).
             Text(
 
               t.aiSteps,
@@ -1560,13 +1608,13 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
             ),
 
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
 
-            ...List.generate(d.steps.length, (i) {
+            ...List.generate(steps.length, (i) {
 
               return Padding(
 
-                padding: const EdgeInsets.symmetric(vertical: 3),
+                padding: const EdgeInsets.symmetric(vertical: 4),
 
                 child: Row(
 
@@ -1576,15 +1624,15 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
                     Container(
 
-                      width: 20,
+                      width: 22,
 
-                      height: 20,
+                      height: 22,
 
                       alignment: Alignment.center,
 
                       decoration: const BoxDecoration(
 
-                        color: Color(0xFFB57A00),
+                        color: AppTheme.primary,
 
                         shape: BoxShape.circle,
 
@@ -1614,15 +1662,15 @@ class _AiChefScreenState extends State<AiChefScreen> {
 
                       child: Text(
 
-                        d.steps[i],
+                        steps[i],
 
                         style: const TextStyle(
 
-                          fontSize: 13,
+                          fontSize: 14,
 
-                          color: Color(0xFF333333),
+                          color: Color(0xFF1F1F1F),
 
-                          height: 1.4,
+                          height: 1.45,
 
                         ),
 
@@ -1637,6 +1685,93 @@ class _AiChefScreenState extends State<AiChefScreen> {
               );
 
             }),
+
+            // Green Bachelor Tip card.
+            if (d.bachelorTip.isNotEmpty) ...[
+
+              const SizedBox(height: 14),
+
+              Container(
+
+                padding: const EdgeInsets.all(12),
+
+                decoration: BoxDecoration(
+
+                  color: const Color(0xFFE6F5EA),
+
+                  borderRadius: BorderRadius.circular(12),
+
+                  border: Border.all(color: const Color(0xFF2E7D32)),
+
+                ),
+
+                child: Row(
+
+                  crossAxisAlignment: CrossAxisAlignment.start,
+
+                  children: [
+
+                    const Icon(Icons.lightbulb_outline,
+
+                        color: Color(0xFF2E7D32), size: 18),
+
+                    const SizedBox(width: 8),
+
+                    Expanded(
+
+                      child: Column(
+
+                        crossAxisAlignment: CrossAxisAlignment.start,
+
+                        children: [
+
+                          Text(
+
+                            isBn ? 'ব্যাচেলর টিপস' : "Bachelor's tip",
+
+                            style: const TextStyle(
+
+                              fontSize: 12,
+
+                              fontWeight: FontWeight.w800,
+
+                              color: Color(0xFF2E7D32),
+
+                            ),
+
+                          ),
+
+                          const SizedBox(height: 4),
+
+                          Text(
+
+                            d.bachelorTip,
+
+                            style: const TextStyle(
+
+                              fontSize: 13,
+
+                              color: Color(0xFF1B3D24),
+
+                              height: 1.4,
+
+                            ),
+
+                          ),
+
+                        ],
+
+                      ),
+
+                    ),
+
+                  ],
+
+                ),
+
+              ),
+
+            ],
 
           ],
 
@@ -1880,7 +2015,7 @@ class _SynthDetailScreen extends StatelessWidget {
 
                 Text(
 
-                  '${recipe.cookingMinutes} ${isBn ? '?????' : 'min'} \u2014 ?${recipe.costTaka} \u2014 ${isBn ? '???' : 'Easy'}',
+                  '${recipe.cookingMinutes} ${isBn ? '\u09AE\u09BF\u09A8\u09BF\u099F' : 'min'} \u2014 \u09F3${recipe.costTaka} \u2014 ${isBn ? '\u09B8\u09B9\u099C' : 'Easy'}',
 
                   style: const TextStyle(
 

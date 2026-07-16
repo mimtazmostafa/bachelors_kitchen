@@ -72,14 +72,43 @@ class SubscriptionProvider extends ChangeNotifier {
     }
   }
 
-  /// Clear all subscription state. Caller is responsible for navigating to
-  /// the SubscribeScreen with `pushAndRemoveUntil((route) => false)` so that
-  /// the back button cannot return to the home shell.
+  /// Clear only the active-subscription flag, keeping the phone so the
+  /// user lands on the Login screen and can re-verify with the same number.
+  /// Caller is responsible for navigating to LoginScreen with
+  /// `pushAndRemoveUntil((route) => false)` so that the back button cannot
+  /// return to the home shell.
   Future<void> logout() async {
+    _isSubscribed = false;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kIsSubscribed);
+    } catch (_) {/* ignore */}
+  }
+
+  /// Clear everything (subscription flag, id, and phone) after the user
+  /// has been unsubscribed server-side. Caller is responsible for
+  /// navigating to SubscribeScreen with `pushAndRemoveUntil((route) => false)`.
+  Future<void> unsubscribe() async {
     _isSubscribed = false;
     _subscriberId = null;
     _subscriberPhone = null;
     notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kIsSubscribed);
+      await prefs.remove(_kSubscriberId);
+      await prefs.remove(_kSubscriberPhone);
+    } catch (_) {/* ignore */}
+  }
+
+  /// Clear any stale persisted state without notifying listeners. Useful
+  /// when the splash screen discovers the saved subscription is no longer
+  /// active and needs to drop it before navigating to Login.
+  Future<void> clear() async {
+    _isSubscribed = false;
+    _subscriberId = null;
+    _subscriberPhone = null;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_kIsSubscribed);

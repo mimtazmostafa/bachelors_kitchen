@@ -1,11 +1,13 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import '../config/bd_apps_config.dart';
 import '../providers/language_provider.dart';
 import '../providers/subscription_provider.dart';
 import '../services/bd_api_client.dart';
 import '../theme/app_theme.dart';
+import 'login_screen.dart' show getBanglaError;
 import 'root_shell.dart';
 
 /// Paywall screen — shown when the user is not subscribed.
@@ -30,6 +32,7 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
   final _api = BdApiClient();
 
   String? _phone880; // 8801XXXXXXXXX — set when OTP is sent successfully
+  String? _referenceNo; // returned by send_otp.php — forwarded to verify_otp.php
   bool _sending = false;
   bool _verifying = false;
   String? _statusOk; // green status
@@ -59,6 +62,23 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
 
   Future<void> _onSendOtp() async {
     final raw = _phoneCtrl.text.trim();
+
+    // DEVELOPER BYPASS — remove before final submission
+    if (raw == '00000000000') {
+      final prefs = await SharedPreferences.getInstance();
+      // Use the same keys SubscriptionProvider reads from so the
+      // splash screen picks up the state on next launch.
+      await prefs.setBool('is_subscribed', true);
+      await prefs.setString('subscriber_phone', '8800000000000');
+      await prefs.setString('subscriber_id', 'dev-bypass');
+      if (mounted) {
+        Navigator.pushNamedAndRemoveUntil(
+          context, '/home', (route) => false);
+      }
+      return;
+    }
+    // END BYPASS
+
     if (!BdApiClient.isValidBdMobile(raw)) {
       _setError(context.read<LanguageProvider>().t.enterValidPhone);
       return;
@@ -71,16 +91,38 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
     if (!mounted) return;
     setState(() => _sending = false);
     if (!res.ok) {
-      _setError(res.error);
+      final t = context.read<LanguageProvider>().t;
+      // Debug-only: show the real gateway payload so we can see WHY
+      // it failed (e.g. E1301 "operator unknown") instead of the
+      // generic localised message.
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[SubscribeScreen] sendOtp FAILED '
+            'statusCode=${res.statusCode} '
+            'error=${res.error}');
+      }
+      String bangla = getBanglaError(res.error, t: t, statusCode: res.statusCode);
+      if (kDebugMode && (res.statusCode != null || (res.error != null && res.error!.isNotEmpty))) {
+        bangla = '$bangla\n[debug ${res.statusCode ?? "-"}] ${res.error ?? ""}';
+      }
+      _setError(bangla);
       return;
     }
-    setState(() => _phone880 = phone880);
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('[SubscribeScreen] sendOtp OK '
+          'referenceNo=${res.referenceNo}');
+    }
+    setState(() {
+      _phone880 = phone880;
+      _referenceNo = res.referenceNo;
+    });
     _setOk(context.read<LanguageProvider>().t.otpSent);
   }
 
   Future<void> _onVerify() async {
     final otp = _otpCtrl.text.trim();
-    if (otp.length != 4 || !RegExp(r'^\d{4}$').hasMatch(otp)) {
+    if (otp.length != 6 || !RegExp(r'^\d{6}$').hasMatch(otp)) {
       _setError(context.read<LanguageProvider>().t.enterValidOtp);
       return;
     }
@@ -90,11 +132,26 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
     }
     setState(() => _verifying = true);
     _setError(null);
-    final res = await _api.verifyOtp(_phone880!, otp);
+    final res = await _api.verifyOtp(
+      _phoneCtrl.text.trim(),
+      otp,
+      referenceNo: _referenceNo,
+    );
     if (!mounted) return;
     setState(() => _verifying = false);
     if (!res.ok) {
-      _setError(res.error);
+      final t = context.read<LanguageProvider>().t;
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[SubscribeScreen] verifyOtp FAILED '
+            'statusCode=${res.statusCode} '
+            'error=${res.error}');
+      }
+      String bangla = getBanglaError(res.error, t: t, statusCode: res.statusCode);
+      if (kDebugMode && (res.statusCode != null || (res.error != null && res.error!.isNotEmpty))) {
+        bangla = '$bangla\n[debug ${res.statusCode ?? "-"}] ${res.error ?? ""}';
+      }
+      _setError(bangla);
       return;
     }
     await context.read<SubscriptionProvider>().subscribe(
@@ -113,6 +170,7 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
   void _onChangeNumber() {
     setState(() {
       _phone880 = null;
+      _referenceNo = null;
       _otpCtrl.clear();
       _statusOk = null;
       _statusErr = null;
@@ -140,11 +198,6 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const SizedBox(height: 16),
-                  if (BdAppsConfig.testMode)
-                    _TestModeBadge(testMode: true, label: t.testModeOn)
-                  else
-                    _TestModeBadge(testMode: false, label: t.testModeOff),
-                  const SizedBox(height: 24),
                   const _EmojiCollage(),
                   const SizedBox(height: 24),
                   _GlowingCard(
@@ -188,7 +241,7 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
                                       style: TextStyle(fontSize: 18)),
                                   SizedBox(width: 6),
                                   Text(
-                                    '৳${BdAppsConfig.displayPricePerDay}/day',
+                                    '৳2.78/day',
                                     style: TextStyle(
                                       fontWeight: FontWeight.w700,
                                       color: AppTheme.primary,
@@ -209,11 +262,7 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
                         _FeatureRow(text: t.featureOffline, icon: '📶'),
                         const SizedBox(height: 20),
                         if (_phone880 == null) ...[
-                          _PhoneInput(
-                            controller: _phoneCtrl,
-                            label: t.phoneLabel,
-                            hint: t.phoneHint,
-                          ),
+                          _PhoneInput(controller: _phoneCtrl),
                           const SizedBox(height: 12),
                           ElevatedButton.icon(
                             onPressed: _sending ? null : _onSendOtp,
@@ -281,9 +330,16 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
                                     if (!mounted) return;
                                     setState(() => _sending = false);
                                     if (res.ok) {
+                                      setState(() => _referenceNo = res.referenceNo);
                                       _setOk(t.otpSent);
                                     } else {
-                                      _setError(res.error);
+                                      _setError(
+                                        getBanglaError(
+                                          res.error,
+                                          t: t,
+                                          statusCode: res.statusCode,
+                                        ),
+                                      );
                                     }
                                   },
                             child: Text(t.resendOtp),
@@ -322,44 +378,6 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _TestModeBadge extends StatelessWidget {
-  final bool testMode;
-  final String label;
-  const _TestModeBadge({required this.testMode, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = testMode ? const Color(0xFFF9A825) : AppTheme.secondary;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            testMode ? Icons.science_outlined : Icons.verified_outlined,
-            size: 16,
-            color: color,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w600,
-              fontSize: 12,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -514,22 +532,18 @@ class _FeatureRow extends StatelessWidget {
 
 class _PhoneInput extends StatefulWidget {
   final TextEditingController controller;
-  final String label;
-  final String hint;
-  const _PhoneInput({
-    required this.controller,
-    required this.label,
-    required this.hint,
-  });
+  const _PhoneInput({required this.controller});
 
   @override
   State<_PhoneInput> createState() => _PhoneInputState();
 }
 
 class _PhoneInputState extends State<_PhoneInput> {
-  // Allow either the 11-digit local form (`01XXXXXXXXX`) or the 10-digit
-  // shorthand form (`1XXXXXXXXX`, since `880` is implied by the prefix).
+  // Local form: 11 digits starting with `0` (e.g. 01839780801). The
+  // prefix is silently swapped to 880 right before the API call.
   static const int _maxLen = 11;
+  static const String _invalidMsg =
+      'শুধুমাত্র Robi (018) বা Airtel (016) নম্বার দিন';
 
   @override
   void initState() {
@@ -544,6 +558,7 @@ class _PhoneInputState extends State<_PhoneInput> {
   }
 
   void _onChanged() {
+    // Strip anything that isn't a digit (paste protection).
     final cleaned = widget.controller.text.replaceAll(RegExp(r'[^0-9]'), '');
     if (cleaned != widget.controller.text) {
       widget.controller.value = TextEditingValue(
@@ -555,45 +570,36 @@ class _PhoneInputState extends State<_PhoneInput> {
     setState(() {});
   }
 
-  /// Hide the `+880 ` prefix once the user starts typing — the user's
-  /// input already encodes the country code (the leading `1` of the
-  /// shorthand, or the full `01...` local form).
-  bool get _shouldShowCountryPrefix {
+  /// Inline validation:
+  ///   - empty / < 11 digits          -> no error shown yet
+  ///   - 11 digits, starts with 016   -> valid (Airtel)
+  ///   - 11 digits, starts with 018   -> valid (Robi)
+  ///   - anything else (11 digits)    -> show Bangla error
+  String? get _errorText {
     final text = widget.controller.text;
-    if (text.isEmpty) return true;
-    // User typed a leading `0` -> they want the full local form.
-    if (text.startsWith('0')) return true;
-    return false;
+    if (text.length != 11) return null;
+    if (text.startsWith('016') || text.startsWith('018')) return null;
+    return _invalidMsg;
   }
 
   @override
   Widget build(BuildContext context) {
+    final err = _errorText;
     return TextField(
       controller: widget.controller,
       keyboardType: TextInputType.phone,
       maxLength: _maxLen,
       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
       decoration: InputDecoration(
-        labelText: widget.label,
-        hintText: widget.hint,
+        hintText: '01XXXXXXXXX',
         prefixIcon: const Icon(Icons.phone_android_rounded),
-        prefixText: _shouldShowCountryPrefix ? '+880 ' : null,
-        prefixStyle: const TextStyle(
-          color: Color(0xFF1B1B1B),
-          fontWeight: FontWeight.w600,
-          fontSize: 16,
-        ),
-        helperText: 'Only Robi (018) or Airtel (016)',
-        helperStyle: const TextStyle(
-          fontSize: 11,
-          color: Color(0xFF6B4A2F),
-          fontWeight: FontWeight.w500,
-        ),
+        errorText: err,
         counterText: '',
       ),
     );
   }
 }
+
 
 class _OtpInput extends StatelessWidget {
   final TextEditingController controller;
@@ -605,7 +611,7 @@ class _OtpInput extends StatelessWidget {
     return TextField(
       controller: controller,
       keyboardType: TextInputType.number,
-      maxLength: 4,
+      maxLength: 6,
       textAlign: TextAlign.center,
       style: const TextStyle(
         fontSize: 26,
@@ -614,6 +620,7 @@ class _OtpInput extends StatelessWidget {
       ),
       decoration: InputDecoration(
         labelText: label,
+        hintText: '6 সংখ্যার OTP লিখুন',
         counterText: '',
         prefixIcon: const Icon(Icons.lock_outline_rounded),
       ),

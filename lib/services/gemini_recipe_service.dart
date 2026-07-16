@@ -4,19 +4,63 @@ import 'dart:convert';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 
+import 'app_translations.dart';
+
 /// Immutable recipe draft returned by Gemini.
+///
+/// The new schema is Bangla-first:
+///   * [recipeNameBn] / [recipeNameEn] — recipe title in both languages
+///   * [ingredients] — list of [DraftIngredient]s (qty + name in both langs)
+///   * [steps] — Bangla-only step strings (English falls back to Bangla)
+///   * [costTaka] — integer ৳/Taka per serving
+///   * [timeMinutes] — integer minutes (prep + cook)
+///   * [difficultyBn] — one of "সহজ", "মাঝারি", "কঠিন"
+///   * [bachelorTip] — short tip card text in Bangla
 class RecipeDraft {
-  final String title;
-  final int prepMinutes;
-  final List<String> ingredients;
-  final List<String> steps;
+  final String recipeNameBn;
+  final String recipeNameEn;
+  final List<DraftIngredient> ingredients;
+  final List<String> steps; // Bangla (English view falls back to Bangla)
+  final int costTaka;
+  final int timeMinutes;
+  final String difficultyBn; // "সহজ" | "মাঝারি" | "কঠিন"
+  final String bachelorTip;
 
   const RecipeDraft({
-    required this.title,
-    required this.prepMinutes,
+    required this.recipeNameBn,
+    required this.recipeNameEn,
     required this.ingredients,
     required this.steps,
+    required this.costTaka,
+    required this.timeMinutes,
+    required this.difficultyBn,
+    required this.bachelorTip,
   });
+
+  /// True if at least the title and one step are present.
+  bool get isUsable =>
+      (recipeNameBn.isNotEmpty || recipeNameEn.isNotEmpty) &&
+      steps.isNotEmpty &&
+      ingredients.isNotEmpty;
+}
+
+/// One ingredient line in a [RecipeDraft].
+class DraftIngredient {
+  final String nameBn;
+  final String nameEn;
+  final String quantity;
+
+  const DraftIngredient({
+    required this.nameBn,
+    required this.nameEn,
+    required this.quantity,
+  });
+
+  /// Display string in Bangla mode: "আলু — ২টা মাঝারি".
+  String displayBn(AppTranslations _) => '$nameBn — $quantity';
+
+  /// Display string in English mode: "Potato — 2 medium".
+  String displayEn(AppTranslations _) => '$nameEn — $quantity';
 }
 
 /// Exception thrown by [GeminiRecipeService] when generation fails.
@@ -96,7 +140,7 @@ class GeminiRecipeService {
       generationConfig: GenerationConfig(
         temperature: 0.7,
         topP: 0.95,
-        maxOutputTokens: 1024,
+        maxOutputTokens: 1536,
         responseMimeType: 'application/json',
       ),
       // CRITICAL: Pin v1 so we don't hit the deprecated v1beta endpoint
@@ -147,6 +191,8 @@ class GeminiRecipeService {
   }
 
   /// Strict system prompt — forces JSON-only output with a fixed schema.
+  /// Bangla-first: every human-readable field is required in Bangla, and
+  /// most fields also carry an English copy for non-Bangla UI mode.
   String _buildSystemPrompt() {
     return '''
 You are an expert, creative Bangladeshi home chef who cooks for university
@@ -160,45 +206,58 @@ OUTPUT RULES (mandatory):
 - No markdown fences, no commentary, no prose before or after the JSON.
 - Use exactly this schema:
   {
-    "title": string,                 // short, appetizing recipe name in English
-    "prep_minutes": integer,         // total time in minutes (prep + cook)
-    "ingredients": [string, ...],    // 5-12 items, "qty + item" form, English
-    "steps": [string, ...]           // 4-10 short imperative steps in English
+    "recipe_name_bn": string,          // Bangla title, e.g. "ডিম পেঁয়াজ ভাজি"
+    "recipe_name_en": string,          // English title, e.g. "Egg Onion Bhaji"
+    "ingredients": [                   // 5-10 items, each an object
+      {
+        "name_bn": string,             // Bangla name, e.g. "ডিম"
+        "name_en": string,             // English name, e.g. "Egg"
+        "quantity": string             // Bangla quantity phrase, e.g. "৩টা"
+      }
+    ],
+    "steps": [string, ...],            // EXACTLY 5 short imperative steps in Bangla
+    "cost_taka": integer,              // estimated cost per serving in Taka (৳), 15-200
+    "time_minutes": integer,           // total time in minutes (prep + cook), 5-60
+    "difficulty_bn": string,           // MUST be exactly "সহজ", "মাঝারি", or "কঠিন"
+    "bachelor_tip": string             // one short practical tip for a bachelor (Bangla)
   }
-- Prefer affordable, common ingredients available in Dhaka / local bazaars
-  (e.g. ডিম, আলু, পেঁয়াজ, টমেটো, মরিচ, কাঁচামরিচ, হলুদ, লবণ, চাল, ডাল, মুরগি,
-  মাছ, বেগুন, ফুলকপি, গাজর, মটর, শসা, ক্যাপসিকাম, ধনেপাতা, রসুন, আদা,
-  সরিষার তেল, তেল, ঘি, মশলা, জিরা, এলাচ, দারুচিনি, চা, চিনি, লবণ, মাখন, দই).
+
+BANGLA CONTENT RULES (mandatory):
+- All Bangla fields (recipe_name_bn, name_bn, steps, bachelor_tip) MUST be
+  written in proper Bengali script. No transliteration, no Roman letters.
+- Steps MUST be in Bangla (not English). Each step is one short imperative
+  sentence in Bangla.
+- Ingredient "quantity" field MUST also be in Bangla (e.g. "৩টা", "১ কাপ",
+  "২ চা চামচ", "১/২ চিমটি"). Do NOT write quantities in English.
+- difficulty_bn must be exactly one of the three Bangla words listed above.
 
 CREATIVE NAMING (mandatory):
 - DO NOT use generic placeholders like "Quick X Stir-Fry", "Easy X Dish",
   "X Bhaji", or "X Curry" unless the dish truly is a stir-fry / curry.
-- Invent a culturally authentic name that matches what the dish actually is.
-  Examples of the *kind* of variety expected:
-    * eggs + onion + chili      → "Dim Peyaj Bhaji" or "Egg Onion Sabzi"
-    * chicken + onion + tomato  → "Chicken Do Peyaza" or "Murgir Jhol"
-    * potato + cauliflower      → "Alu Phulkopi Dalna"
-    * rice + lentil + onion     → "Bhaja Khichuri"
-    * brinjal + tomato + chili  → "Begun Tarkari"
-    * plain bread + eggs        → "Ruti Dim Roti"
-- The title must be a real dish name, not "<ingredient> recipe".
+- The Bangla title must be a real Bangladeshi dish name, not "<ingredient> রেসিপি".
+- Examples of the kind of variety expected:
+    * eggs + onion + chili      → "ডিম পেঁয়াজ ভাজি" / "Dim Peyaj Bhaji"
+    * chicken + onion + tomato  → "মুরগির ঝোল" / "Murgir Jhol"
+    * potato + cauliflower      → "আলু ফুলকপি দলনা" / "Alu Phulkopi Dalna"
+    * rice + lentil + onion     → "ভাজা খিচুড়ি" / "Bhaja Khichuri"
+    * brinjal + tomato + chili  → "বেগুন তরকারি" / "Begun Tarkari"
+    * plain bread + eggs        → "রুটি ডিম রোল" / "Ruti Dim Roll"
 
 TEXT ENCODING (mandatory):
-- You must output clean, standard UTF-8 text. Do not escape Bengali Unicode
-  characters with backslashes (e.g. never write "\\u09A6" or "\\u09BF" — write
-  the actual characters: "ডিম").
+- Output clean, standard UTF-8 text. Write Bengali characters directly
+  (e.g. "ডিম"), never as escapes like "\\u09A6\\u09BF\\u09AE".
 - Do not HTML-encode, hex-encode, or otherwise mangle non-ASCII characters.
 
-VARIETY RULES (mandatory):
-- Every request must produce a UNIQUE title. If the user has asked twice
-  with the same ingredients, vary the title, technique (bhaja / jhol / chop /
-  bhorta / torkari / dom), or spice profile so the second response is not a
-  copy of the first.
-- Vary the cooking technique based on what the user described. Bhaja means
-  stir-fry, Jhol means light gravy, Dalna is a thick curry, Bhorta is a
-  mashed mix, Chop is a cutlet, Torkari is a general vegetable dish.
-- Keep steps short (one sentence each), numbered mentally but do NOT prefix
-  with numbers in the output.
+COOKING RULES (mandatory):
+- cost_taka MUST be realistic for a bachelor in Bangladesh: 15-200 ৳/serving.
+- time_minutes MUST be realistic: 5-60 minutes total.
+- Use affordable, common ingredients from Dhaka / local bazaars
+  (ডিম, আলু, পেঁয়াজ, টমেটো, মরিচ, কাঁচামরিচ, হলুদ, লবণ, চাল, ডাল, মুরগি,
+  মাছ, বেগুন, ফুলকপি, গাজর, মটর, শসা, ক্যাপসিকাম, ধনেপাতা, রসুন, আদা,
+  সরিষার তেল, তেল, ঘি, মশলা, জিরা, এলাচ, দারুচিনি, চা, চিনি, লবণ, মাখন, দই).
+- Steps should fit on one short line each (15-25 Bangla words max).
+- The bachelor_tip should be one practical sentence that helps a beginner
+  cook (e.g. about heat level, salt, or timing).
 ''';
   }
 
@@ -232,17 +291,44 @@ VARIETY RULES (mandatory):
       );
     }
 
-    final title = (json['title'] as String?)?.trim() ?? '';
-    final prepRaw = json['prep_minutes'];
-    final prepMinutes = prepRaw is int
-        ? prepRaw
-        : (prepRaw is num ? prepRaw.toInt() : 0);
-    final ingredients = (json['ingredients'] as List?)
-            ?.whereType<String>()
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .toList() ??
-        const <String>[];
+    final recipeNameBn =
+        (json['recipe_name_bn'] as String?)?.trim() ?? '';
+    final recipeNameEnRaw =
+        (json['recipe_name_en'] as String?)?.trim() ?? '';
+    final recipeNameEn = recipeNameEnRaw.isNotEmpty
+        ? recipeNameEnRaw
+        : recipeNameBn; // fall back to Bangla if model omitted EN
+
+    // Ingredients: list of objects with {name_bn, name_en, quantity}.
+    final rawIngredients = json['ingredients'];
+    final ingredients = <DraftIngredient>[];
+    if (rawIngredients is List) {
+      for (final item in rawIngredients) {
+        if (item is Map<String, dynamic>) {
+          final nameBn = (item['name_bn'] as String?)?.trim() ?? '';
+          final nameEnRaw = (item['name_en'] as String?)?.trim() ?? '';
+          final qty = (item['quantity'] as String?)?.trim() ?? '';
+          if (nameBn.isEmpty && nameEnRaw.isEmpty && qty.isEmpty) continue;
+          ingredients.add(DraftIngredient(
+            nameBn: nameBn,
+            nameEn: nameEnRaw.isNotEmpty ? nameEnRaw : nameBn,
+            quantity: qty,
+          ));
+        } else if (item is String) {
+          // Back-compat: if Gemini returns the old flat-string schema,
+          // treat the whole string as a Bangla ingredient name.
+          final s = item.trim();
+          if (s.isNotEmpty) {
+            ingredients.add(DraftIngredient(
+              nameBn: s,
+              nameEn: s,
+              quantity: '',
+            ));
+          }
+        }
+      }
+    }
+
     final steps = (json['steps'] as List?)
             ?.whereType<String>()
             .map((s) => s.trim())
@@ -250,7 +336,44 @@ VARIETY RULES (mandatory):
             .toList() ??
         const <String>[];
 
-    if (title.isEmpty) {
+    int costTaka = 0;
+    final rawCost = json['cost_taka'];
+    if (rawCost is int) {
+      costTaka = rawCost;
+    } else if (rawCost is num) {
+      costTaka = rawCost.toInt();
+    } else if (rawCost is String) {
+      costTaka = int.tryParse(rawCost.trim()) ?? 0;
+    }
+    if (costTaka < 0) costTaka = 0;
+
+    int timeMinutes = 0;
+    final rawTime = json['time_minutes'] ?? json['prep_minutes'];
+    if (rawTime is int) {
+      timeMinutes = rawTime;
+    } else if (rawTime is num) {
+      timeMinutes = rawTime.toInt();
+    } else if (rawTime is String) {
+      timeMinutes = int.tryParse(rawTime.trim()) ?? 0;
+    }
+    if (timeMinutes < 0) timeMinutes = 0;
+
+    final difficultyRaw =
+        (json['difficulty_bn'] as String?)?.trim() ?? 'সহজ';
+    const allowedDifficulty = {'সহজ', 'মাঝারি', 'কঠিন'};
+    final difficultyBn =
+        allowedDifficulty.contains(difficultyRaw) ? difficultyRaw : 'সহজ';
+
+    final bachelorTip =
+        (json['bachelor_tip'] as String?)?.trim() ?? '';
+
+    // Back-compat: if old "title" field exists but no Bangla title,
+    // promote it to English title.
+    final recipeNameEnResolved = recipeNameEn.isNotEmpty
+        ? recipeNameEn
+        : ((json['title'] as String?)?.trim() ?? '');
+
+    if (recipeNameBn.isEmpty && recipeNameEnResolved.isEmpty) {
       throw const GeminiRecipeException('Recipe was missing a title.');
     }
     if (ingredients.isEmpty) {
@@ -261,10 +384,14 @@ VARIETY RULES (mandatory):
     }
 
     return RecipeDraft(
-      title: title,
-      prepMinutes: prepMinutes,
+      recipeNameBn: recipeNameBn.isNotEmpty ? recipeNameBn : recipeNameEnResolved,
+      recipeNameEn: recipeNameEnResolved,
       ingredients: ingredients,
       steps: steps,
+      costTaka: costTaka,
+      timeMinutes: timeMinutes,
+      difficultyBn: difficultyBn,
+      bachelorTip: bachelorTip,
     );
   }
 }
